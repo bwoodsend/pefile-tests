@@ -26,8 +26,10 @@ import os
 import difflib
 from hashlib import sha256
 import unittest
+import gc
 
 from io import open
+import psutil
 import pytest
 
 import pefile
@@ -41,6 +43,17 @@ test_dir = os.path.dirname(here)
 REGRESSION_TESTS_DIR = os.path.join(test_dir, "data")
 POCS_TESTS_DIR = os.path.join(test_dir, "corkami/pocs")
 LIEF_TESTS_DIR = os.path.join(test_dir, "lief-samples-PE")
+
+
+@pytest.fixture(autouse=True)
+def check_handles():
+    gc.disable()
+    process = psutil.Process()
+    files_before = process.open_files()
+    yield
+    files_after = process.open_files()
+    assert sorted(files_after) == sorted(files_before)
+    gc.enable()
 
 
 def _load_test_files():
@@ -129,6 +142,7 @@ def test_pe_image_regression_test(pe_filename, REGEN=False):
 
         else:
             assert pe_file_data == control_data.decode("utf-8")
+    pe.close()
 
 
 class Test_pefile(unittest.TestCase):
@@ -160,6 +174,8 @@ class Test_pefile(unittest.TestCase):
         )
         self.assertRaises(Exception, pe.get_rich_header_hash, algorithm="badalgo")
 
+        pe.close()
+
     def test_selective_loading_integrity(self):
         """Verify integrity of loading the separate elements of the file as
         opposed to do a single pass.
@@ -182,30 +198,22 @@ class Test_pefile(unittest.TestCase):
     def test_imphash(self):
         """Test imphash values."""
 
-        self.assertEqual(
-            pefile.PE(os.path.join(REGRESSION_TESTS_DIR, "mfc40.dll")).get_imphash(),
-            "b0f969ff16372d95ef57f05aa8f69409",
-        )
+        with pefile.PE(os.path.join(REGRESSION_TESTS_DIR, "mfc40.dll")) as pe:
+            self.assertEqual(pe.get_imphash(), "b0f969ff16372d95ef57f05aa8f69409")
 
-        self.assertEqual(
-            pefile.PE(os.path.join(REGRESSION_TESTS_DIR, "kernel32.dll")).get_imphash(),
-            "437d147ea3f4a34fff9ac2110441696a",
-        )
+        with pefile.PE(os.path.join(REGRESSION_TESTS_DIR, "kernel32.dll")) as pe:
+            self.assertEqual(pe.get_imphash(), "437d147ea3f4a34fff9ac2110441696a")
 
-        self.assertEqual(
-            pefile.PE(
+        with pefile.PE(
                 os.path.join(
                     REGRESSION_TESTS_DIR,
                     "66c74e4c9dbd1d33b22f63cd0318b72dea88f9dbb4d36a3383d3da20b037d42e",
                 )
-            ).get_imphash(),
-            "a781de574e0567285ee1233bf6a57cc0",
-        )
+        ) as pe:
+            self.assertEqual(pe.get_imphash(), "a781de574e0567285ee1233bf6a57cc0")
 
-        self.assertEqual(
-            pefile.PE(os.path.join(REGRESSION_TESTS_DIR, "cmd.exe")).get_imphash(),
-            "d0058544e4588b1b2290b7f4d830eb0a",
-        )
+        with pefile.PE(os.path.join(REGRESSION_TESTS_DIR, "cmd.exe")) as pe:
+            self.assertEqual(pe.get_imphash(), "d0058544e4588b1b2290b7f4d830eb0a")
 
     def test_write_header_fields(self):
         """Verify correct field data modification."""
@@ -257,6 +265,7 @@ class Test_pefile(unittest.TestCase):
         # Truncate it at the PE header and add invalid data.
         pe_header_offest = pe.DOS_HEADER.e_lfanew
         corrupted_data = pe.__data__[:pe_header_offest] + b"\0" * (1024 * 10)
+        pe.close()
 
         self.assertRaises(pefile.PEFormatError, pefile.PE, data=corrupted_data)
 
@@ -328,7 +337,8 @@ class Test_pefile(unittest.TestCase):
         control_file = os.path.join(
             REGRESSION_TESTS_DIR, "pefile-314/crash-8499a0bb33aeba8f59a172584abc7ca0ab82a78c"
         )
-        pe = pefile.PE(control_file)
+        with pefile.PE(control_file) as pe:
+            pass
 
     def test_checksum(self):
         """Verify correct calculation of checksum"""
